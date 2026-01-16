@@ -1,36 +1,73 @@
+# NeuralGuard Engine v8.8 - Enterprise Edition
 import cv2
 import time
-from flask import Flask, Response, jsonify
+import os
+import base64
+import threading
+from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 
-# CONFIGURACOES RTSP
-RTSP_URL = "rtsp://admin:SSmed3102@192.168.0.164:554/cam/realmonitor?channel=1&subtype=0"
+SUBTYPES = [1, 0] 
+SAVE_PATH = "Fotos"
+if not os.path.exists(SAVE_PATH): os.makedirs(SAVE_PATH)
 
-def generate_frames():
-    cap = cv2.VideoCapture(RTSP_URL)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+last_frame = None
+camera_status = "Iniciando..."
+
+def update_camera():
+    global last_frame, camera_status
+    curr = 0
     while True:
-        success, frame = cap.read()
-        if not success:
-            time.sleep(0.5)
-            cap = cv2.VideoCapture(RTSP_URL)
-            continue
-        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        frame_bytes = buffer.tobytes()
-        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        subtype = SUBTYPES[curr % 2]
+        url = f"rtsp://admin:SSmed3102@192.168.0.164:554/cam/realmonitor?channel=1&subtype={subtype}"
+        cap = cv2.VideoCapture(url)
+        start = time.time()
+        while time.time() - start < 15:
+            success, frame = cap.read()
+            if success:
+                camera_status = f"Online (CH {subtype})"
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                last_frame = buffer.tobytes()
+            else: break
+        cap.release()
+        curr += 1
+        time.sleep(1)
 
+threading.Thread(target=update_camera, daemon=True).start()
+
+@app.route('/snapshot')
 @app.route('/video_feed')
-def video_feed():
-    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+def get_frame():
+    if last_frame is None: return "Wait...", 503
+    return Response(last_frame, mimetype='image/jpeg')
+
+@app.route('/save_face', methods=['POST'])
+def save_face():
+    try:
+        data = request.json
+        img_b64 = data.get('image').split(',')[1]
+        filename = f"face_{int(time.time())}.jpg"
+        filepath = os.path.join(SAVE_PATH, filename)
+        with open(filepath, "wb") as f:
+            f.write(base64.b64decode(img_b64))
+        print(f">>> ROSTO SALVO: {filename}")
+        return jsonify({"status": "ok", "file": filename})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": str(e)}), 500
+
+@app.route('/list_photos')
+def list_photos():
+    files = os.listdir(SAVE_PATH)
+    return jsonify({"count": len(files), "latest": sorted(files)[-5:] if files else []})
 
 @app.route('/health')
 def health():
-    return jsonify({"status": "bridge_ready", "version": "6.9", "port": 5050})
+    return jsonify({"status": "bridge_ready", "camera": camera_status, "v": "8.8"})
 
 if __name__ == "__main__":
-    print("--- NEURALGUARD ENGINE v6.9 ---")
-    print("PORTA: 5050 | STATUS: AGUARDANDO")
-    app.run(host='0.0.0.0', port=5050, debug=False, threaded=True)
+    print("--- NEURALGUARD v8.8 ---")
+    app.run(host='0.0.0.0', port=5050, threaded=True)
+
