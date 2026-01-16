@@ -1,4 +1,4 @@
-# NeuralGuard Engine v9.0 - Ultimate Edition
+# NeuralGuard Engine v9.1 - Universal Stable
 import cv2
 import time
 import os
@@ -10,7 +10,7 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-# CONFIGURAÇÕES INJETADAS
+# CONFIGURAÇÕES DA CÂMERA
 CAM_USER = "admin"
 CAM_PASS = "SSmed3102"
 CAM_IP = "192.168.0.164"
@@ -20,15 +20,16 @@ if not os.path.exists(SAVE_PATH):
     os.makedirs(SAVE_PATH)
 
 last_frame = None
-camera_status = "Buscando..."
+camera_status = "Iniciando..."
 
 def update_camera():
     global last_frame, camera_status
     
+    # Lista de tentativas comuns para Intelbras, Hikvision e Dahua
     url_patterns = [
         f"rtsp://{CAM_USER}:{CAM_PASS}@{CAM_IP}:554/cam/realmonitor?channel=1&subtype=1",
-        f"rtsp://{CAM_USER}:{CAM_PASS}@{CAM_IP}:554/cam/realmonitor?channel=1&subtype=0",
         f"rtsp://{CAM_USER}:{CAM_PASS}@{CAM_IP}:554/Streaming/Channels/102",
+        f"rtsp://{CAM_USER}:{CAM_PASS}@{CAM_IP}:554/cam/realmonitor?channel=1&subtype=0",
         f"rtsp://{CAM_USER}:{CAM_PASS}@{CAM_IP}:554/live/ch0"
     ]
     
@@ -36,47 +37,48 @@ def update_camera():
     
     while True:
         url = url_patterns[pattern_idx % len(url_patterns)]
-        print(f"[*] [THREAD] Tentando: {url}")
+        print(f"[*] Tentando conexão: {url}")
         
         cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
         
         if not cap.isOpened():
-            camera_status = f"Erro no Padrão {pattern_idx + 1}"
+            print(f"[!] Falha no padrão {pattern_idx + 1}. Tentando outro...")
+            camera_status = f"Erro no Fluxo {pattern_idx + 1}"
             pattern_idx += 1
-            time.sleep(3)
+            time.sleep(2)
             continue
 
-        print(f"[OK] [THREAD] Conectado à Câmera com Sucesso!")
+        print(f"[OK] Câmera Conectada!")
         camera_status = "Online (Sinal OK)"
         
         fail_count = 0
-        while fail_count < 15:
+        while fail_count < 20:
             success, frame = cap.read()
             if success:
-                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                # Otimização de imagem para transmissão via túnel
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
                 last_frame = buffer.tobytes()
                 fail_count = 0
             else:
                 fail_count += 1
-                time.sleep(0.05)
+                time.sleep(0.01)
         
-        print("[!] [THREAD] Perda de sinal. Reconectando...")
+        print("[!] Sinal perdido. Reiniciando...")
         cap.release()
         pattern_idx += 1
         time.sleep(1)
 
+# Inicia thread de captura em segundo plano
 threading.Thread(target=update_camera, daemon=True).start()
 
 @app.route('/video_feed')
 def get_frame():
-    print(f"[*] [REQUEST] Video Feed solicitado por {request.remote_addr}")
     if last_frame is None:
-        return "Sem sinal da camera", 503
+        return "Aguardando sinal...", 503
     return Response(last_frame, mimetype='image/jpeg')
 
 @app.route('/save_face', methods=['POST'])
 def save_face():
-    print(f"[*] [REQUEST] Comando de salvar rosto recebido")
     try:
         data = request.json
         img_data = data.get('image').split(',')[1]
@@ -84,9 +86,9 @@ def save_face():
         filepath = os.path.join(SAVE_PATH, filename)
         with open(filepath, "wb") as f:
             f.write(base64.b64decode(img_data))
+        print(f"[STORAGE] Rosto salvo: {filename}")
         return jsonify({"status": "ok", "file": filename})
     except Exception as e:
-        print(f"[ERRO] Falha ao salvar: {e}")
         return jsonify({"status": "error", "msg": str(e)}), 500
 
 @app.route('/health')
@@ -94,16 +96,17 @@ def health():
     return jsonify({
         "status": "bridge_ready", 
         "camera": camera_status, 
-        "v": "9.0",
-        "storage": len(os.listdir(SAVE_PATH)) if os.path.exists(SAVE_PATH) else 0
+        "v": "9.1",
+        "storage_count": len(os.listdir(SAVE_PATH)) if os.path.exists(SAVE_PATH) else 0
     })
 
 if __name__ == "__main__":
-    print("\n" + "="*55)
-    print("      NEURALGUARD BRIDGE v9.0 - ULTIMATE EDITION")
-    print("="*55)
-    print(f"[*] Status: Aguardando Dashboard em http://0.0.0.0:5050")
-    print(f"[*] Alvo Câmera: {CAM_IP}")
-    print("="*55 + "\n")
+    print("\n" + "="*50)
+    print("      NEURALGUARD BRIDGE v9.1 - UNIVERSAL")
+    print("="*50)
+    print(f"[*] Escutando em: http://0.0.0.0:5050")
+    print(f"[*] Alvo: {CAM_IP}")
+    print("="*50 + "\n")
     app.run(host='0.0.0.0', port=5050, threaded=True)
+
 
